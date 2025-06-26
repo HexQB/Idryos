@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # Backend principal Rust - Auth Service
+  auth-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${AUTH_SERVICE_PORT:-8000}:8000"
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - TOKEN_EXPIRATION_MINUTES=${TOKEN_EXPIRATION_MINUTES}
+      - DATABASE_URL=${DATABASE_URL}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.auth.rule=PathPrefix(`/api/auth`)"
+      - "traefik.http.services.auth.loadbalancer.server.port=8000"
+
+  # Microservice Go - P2P Network
+  p2p-service:
+    build:
+      context: ./services/p2p
+      dockerfile: Dockerfile
+    ports:
+      - "${P2P_PORT:-4001}:4001"
+    environment:
+      - P2P_BOOTSTRAP_NODES=${P2P_BOOTSTRAP_NODES}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./data/p2p:/app/data
+
+  # Frontend SvelteKit
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - FRONTEND_URL=${FRONTEND_URL}
+      - API_BASE_URL=http://traefik/api
+    depends_on:
+      - auth-service
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+
+  # Gateway API - Traefik
+  traefik:
+    image: traefik:v2.10
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "${GATEWAY_PORT:-80}:80"
+      - "8080:8080" # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # IPFS (optionnel)
+  ipfs:
+    image: ipfs/kubo:latest
+    ports:
+      - "4001:4001" # P2P
+      - "5001:5001" # API
+      - "8081:8080" # Gateway
+    volumes:
+      - ./data/ipfs:/data/ipfs
+    profiles:
+      - ipfs
+
+volumes:
+  data:
+    driver: local
